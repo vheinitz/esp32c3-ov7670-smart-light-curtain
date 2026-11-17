@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# mit Taste s gespeicherte Bilder
+ov7670_*.png
+build/
