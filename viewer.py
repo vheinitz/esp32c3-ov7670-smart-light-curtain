@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
-"""Viewer für ov7670_c3: holt Graustufenbilder per USB-CDC, Anzeige mit OpenCV.
+"""Viewer for ov7670_c3: fetches grayscale images over USB CDC and displays them with OpenCV.
 
-Ohne Binning 4 Bit je Pixel; mit Binning (digitale Mittelung über bh x bv in der Firmware) 8 Bit.
-Angezeigt und gespeichert wird immer 8 Bit (Nibble * 17 bzw. Mittelwert * 17).
+Without binning 4 bits per pixel; with binning (digital averaging over bh x bv in the firmware) 8 bits.
+Display and saved files are always 8 bit (nibble * 17 or mean * 17, respectively).
 
-Tasten im Fenster:
-  a          Dauerbetrieb an/aus (Start: an)
-  Leertaste  Einzelbild (im Standbildbetrieb)
-  h / v      Binning horizontal / vertikal durchschalten (1, 2, 4, 8)
-  e / r      Belichtung kürzer / länger (Faktor 1,25; schaltet AEC ab)
-  g / f      Verstärkung kleiner / größer (schaltet AGC ab)
-             Jede dieser Tasten schaltet beide Automatiken ab und hält den anderen Wert fest.
-             (r/f statt Shift+E/G: OpenCV mit Qt-Backend unter Wayland meldet Shift nicht;
-             E/G gehen zusätzlich, wo Shift ankommt)
-  x          Belichtung und Verstärkung zurück auf Automatik
-  t          Schwellenwert-Anzeige an/aus (Pixel >= th grün)
-  + / -      Schwellenwert th erhöhen / senken (Schritt 5)
-  p          Byte-Phase umschalten (falls das Bild flach grau ist: U/V statt Y)
-  s          als PNG speichern
-  q / Esc    beenden; gibt die passenden scan.py-Parameter aus
+Keys in the window:
+  a          toggle continuous mode (initially on)
+  Space      single frame (in still mode)
+  h / v      cycle horizontal / vertical binning (1, 2, 4, 8)
+  e / r      shorter / longer exposure (factor 1.25; disables AEC)
+  g / f      lower / higher gain (disables AGC)
+             Each of these keys disables both automatic controls and freezes the other value.
+             (r/f instead of Shift+E/G: OpenCV with the Qt backend under Wayland does not report
+             Shift; E/G also work where Shift gets through)
+  x          reset exposure and gain to automatic
+  t          toggle threshold overlay (pixels >= th green)
+  + / -      raise / lower threshold th (step 5)
+  p          toggle byte phase (if the image is flat gray: U/V instead of Y)
+  s          save as PNG
+  q / Esc    quit; prints the matching scan.py parameters
 
-Einstellhilfe für scan.py: --slit zeichnet den Spalt ein und markiert die Kante, die scan.py mit
-dem aktuellen th finden würde (gleiche Logik wie die Firmware, aber auf dem 4-Bit-Bild).
-"focus" = Varianz des Laplace-Filters (im Spalt-Umfeld bzw. ganzen Bild); größer = schärfer,
-nur relativ beim Drehen am Objektiv vergleichbar.
+Setup aid for scan.py: --slit draws the slit and marks the edge that scan.py would find with the
+current th (same logic as the firmware, but on the 4-bit image).
+"focus" = variance of the Laplacian (around the slit or over the whole image); larger = sharper,
+only comparable relatively while turning the lens.
 
-Modi (--mode), Bildperiode:  0 VGA 640x479 107 ms | 1 QVGA 320x239 80 ms | 2 QQVGA 160x119 27 ms
+Modes (--mode), frame period:  0 VGA 640x479 107 ms | 1 QVGA 320x239 80 ms | 2 QQVGA 160x119 27 ms
 
-Beispiel:
-  python3 viewer.py /dev/ttyACM0                                # QQVGA-Video zum Einstellen
-  python3 viewer.py /dev/ttyACM0 --slit 0 56 160 8 --th 100     # mit Spalt und Schwelle
-  python3 viewer.py /dev/ttyACM0 --mode 0 --step 2              # VGA, dezimiert
-  python3 viewer.py /dev/ttyACM0 --mode 0 --roi 0 200 640 10    # VGA-Streifen
-  python3 viewer.py /dev/ttyACM0 --mode 2                       # schnellster Modus
-  python3 viewer.py /dev/ttyACM0 --mode 0 --bin 4 1             # VGA, horizontal 4fach gebinnt
-  python3 viewer.py /dev/ttyACM0 --exp 200 --gain 16            # feste Belichtung/Verstärkung
+Examples:
+  python3 viewer.py /dev/ttyACM0                                # QQVGA video for setup
+  python3 viewer.py /dev/ttyACM0 --slit 0 56 160 8 --th 100     # with slit and threshold
+  python3 viewer.py /dev/ttyACM0 --mode 0 --step 2              # VGA, decimated
+  python3 viewer.py /dev/ttyACM0 --mode 0 --roi 0 200 640 10    # VGA strip
+  python3 viewer.py /dev/ttyACM0 --mode 2                       # fastest mode
+  python3 viewer.py /dev/ttyACM0 --mode 0 --bin 4 1             # VGA, 4x horizontal binning
+  python3 viewer.py /dev/ttyACM0 --exp 200 --gain 16            # fixed exposure/gain
 """
 import argparse
 import time
@@ -51,8 +51,8 @@ def wait_line(ser, prefixes, timeout):
         if not raw:
             continue
         line = raw.decode(errors="replace").strip()
-        # Kennwort auch mitten in der Zeile suchen: vor einer Antwort kann noch Binärrest des
-        # vorigen Bildes stehen (verspätetes USB-Paket), dann beginnt die Zeile nicht mit dem Wort.
+        # Search for the keyword anywhere in the line: a reply may be preceded by binary leftovers
+        # of the previous image (late USB packet), so the line does not start with the keyword.
         for p in prefixes + ("ERR",):
             i = line.find(p)
             if i >= 0 and (len(line) == i + len(p) or line[i + len(p)] == " "):
@@ -61,11 +61,11 @@ def wait_line(ser, prefixes, timeout):
                 return line[i:]
         if line and "INFO" not in line and line != "END":
             print("<", line[:80] + ("..." if len(line) > 80 else ""))
-    raise TimeoutError(f"keine Antwort {prefixes}")
+    raise TimeoutError(f"no reply {prefixes}")
 
 
 def drain(ser, quiet=0.2):
-    """Eingang leeren, bis die Leitung `quiet` Sekunden still ist (Reste eines kaputten Bildes)."""
+    """Flush input until the line has been silent for `quiet` seconds (leftovers of a broken image)."""
     old, ser.timeout = ser.timeout, quiet
     while ser.read(4096):
         pass
@@ -73,32 +73,31 @@ def drain(ser, quiet=0.2):
 
 
 def capture_once(ser, roi, step, phase, binning=(1, 1)):
-    """Liefert ein 8-Bit-Bild (0..255)."""
+    """Return an 8-bit image (0..255)."""
     ser.reset_input_buffer()
     x, y, w, h = roi
     bh, bv = binning
     ser.write(f"C {x} {y} {w} {h} {step} {phase} {bh} {bv}\n".encode())
-    # Ein Bild dauert höchstens ~0,5 s (VGA mit Binning, zwei Durchgänge). Vorher 40 s: ging ein
-    # Bildkopf verloren, stand die Anzeige so lange (wirkte wie Einfrieren).
+    # One image takes at most ~0.5 s (VGA with binning, two passes). Previously 40 s: if an image
+    # header was lost, the display stalled that long (looked like a freeze).
     f = wait_line(ser, ("IMG",), 3).split()
     ow, oh, chk = int(f[1]), int(f[2]), int(f[3])
     bpp = int(f[4]) if len(f) > 4 else 4
     rb = ow if bpp == 8 else (ow + 1) // 2
-    # Daten kommen per USB in wenigen ms (QQVGA ~10 ms); kurzer Timeout, damit ein hängendes
-    # Paket schnell angestoßen wird statt eine volle Sekunde zu warten.
+    # Data arrive over USB within a few ms (QQVGA ~10 ms); short timeout so that a stuck
+    # packet is pushed quickly instead of waiting a full second.
     old, ser.timeout = ser.timeout, 0.2 + rb * oh / 200000
     data = ser.read(rb * oh)
     ser.timeout = old
     if len(data) < rb * oh:
-        # Das letzte USB-Paket bleibt im ESP32-C3 gelegentlich hängen, bis weitere Daten folgen.
-        # Eine beliebige Anfrage schiebt es hinterher; die Antwort darauf überliest der nächste
-        # wait_line()-Aufruf.
+        # The last USB packet occasionally gets stuck in the ESP32-C3 until more data follow.
+        # Any request pushes it out; the reply to it is skipped by the next wait_line() call.
         ser.write(b"I\n")
         data += ser.read(rb * oh - len(data))
     if len(data) != rb * oh:
-        raise RuntimeError(f"unvollständig: {len(data)}/{rb * oh} Byte")
+        raise RuntimeError(f"incomplete: {len(data)}/{rb * oh} bytes")
     if sum(data) & 0xFFFF != chk:
-        raise RuntimeError("Prüfsumme falsch")
+        raise RuntimeError("checksum mismatch")
     a = np.frombuffer(data, np.uint8).reshape(oh, rb)
     if bpp == 8:
         return a.copy()
@@ -109,14 +108,14 @@ def capture_once(ser, roi, step, phase, binning=(1, 1)):
 
 
 def capture(ser, roi, step, phase, binning=(1, 1), retries=3):
-    # USB-CDC verliert nach langen Interrupt-Sperren gelegentlich ein 64-Byte-Paket -> wiederholen
+    # USB CDC occasionally loses a 64-byte packet after long interrupt lockouts -> retry
     for i in range(retries):
         try:
             return capture_once(ser, roi, step, phase, binning)
         except (RuntimeError, TimeoutError, ValueError) as e:
             if str(e).startswith("ERR") or i == retries - 1:
                 raise
-            print("Wiederholung:", e)
+            print("Retry:", e)
             drain(ser)
 
 
@@ -126,9 +125,9 @@ def query(ser, cmd, prefix):
 
 
 def to_display(img, min_h=360, min_w=480, th=None):
-    """Ganzzahlig vergrößern (nearest). Höhe und Breite getrennt, damit ein
-    10-Zeilen-Streifen sichtbar wird (er wird dabei vertikal gestreckt).
-    Liefert (Bild, fx, fy). th: Pixel >= th grün einfärben."""
+    """Upscale by an integer factor (nearest). Height and width separately, so that a
+    10-row strip becomes visible (it is stretched vertically).
+    Returns (image, fx, fy). th: color pixels >= th green."""
     fy = max(1, -(-min_h // img.shape[0]))
     fx = max(1, -(-min_w // img.shape[1]))
     disp = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
@@ -141,7 +140,7 @@ def to_display(img, min_h=360, min_w=480, th=None):
 
 
 def first_edge(prof, th):
-    """Wie die Firmware (Befehl S): erste Schwellen-Überschreitung, linear interpoliert."""
+    """Like the firmware (command S): first threshold crossing, linearly interpolated."""
     for i in range(1, len(prof)):
         a, b = prof[i - 1] >= th, prof[i] >= th
         if a != b:
@@ -157,33 +156,33 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("port")
     ap.add_argument("--mode", type=int, default=2, choices=[0, 1, 2],
-                    help="0 VGA, 1 QVGA, 2 QQVGA (Default)")
+                    help="0 VGA, 1 QVGA, 2 QQVGA (default)")
     ap.add_argument("--slit", type=int, nargs=4, default=None, metavar=("X", "Y", "W", "H"),
-                    help="Spalt wie bei scan.py --roi einzeichnen und Kante anzeigen")
-    ap.add_argument("--th", type=int, default=128, help="Schwellenwert 0..255 für Anzeige/Spalt")
+                    help="draw slit as with scan.py --roi and show the edge")
+    ap.add_argument("--th", type=int, default=128, help="threshold 0..255 for overlay/slit")
     ap.add_argument("--roi", type=int, nargs=4, default=None, metavar=("X", "Y", "W", "H"),
-                    help="Ausschnitt in Pixeln des Modus (Default: ganzes Bild)")
-    ap.add_argument("--step", type=int, default=1, help="Dezimierung (1 = volle Auflösung)")
+                    help="region in pixels of the mode (default: whole image)")
+    ap.add_argument("--step", type=int, default=1, help="decimation (1 = full resolution)")
     ap.add_argument("--bin", type=int, nargs=2, default=[1, 1], metavar=("BH", "BV"),
-                    help="Binning horizontal/vertikal 1..8 (digitale Mittelung, 8-Bit-Ausgabe)")
+                    help="horizontal/vertical binning 1..8 (digital averaging, 8-bit output)")
     ap.add_argument("--exp", type=int, default=None,
-                    help="Belichtung in Zeilenperioden (0 = Automatik)")
-    ap.add_argument("--gain", type=int, default=None, help="Verstärkung 0..1023 (-1 = Automatik)")
+                    help="exposure in line periods (0 = automatic)")
+    ap.add_argument("--gain", type=int, default=None, help="gain 0..1023 (-1 = automatic)")
     ap.add_argument("--phase", type=int, default=1, choices=[0, 1])
     ap.add_argument("--delay", type=int, default=None,
-                    help="Pause vor dem Senden [ms] (Firmware-Default 0)")
+                    help="delay before sending [ms] (firmware default 0)")
     ap.add_argument("--reg", action="append", default=[], metavar="RR=VV",
-                    help="weitere Sensorregister vorab schreiben (hex)")
-    ap.add_argument("--still", action="store_true", help="im Standbildbetrieb starten")
-    ap.add_argument("--shot", default=None, metavar="DATEI",
-                    help="nach 3 s das Fensterbild als PNG speichern und beenden")
+                    help="write additional sensor registers beforehand (hex)")
+    ap.add_argument("--still", action="store_true", help="start in still mode")
+    ap.add_argument("--shot", default=None, metavar="FILE",
+                    help="after 3 s save the window image as PNG and quit")
     ap.add_argument("--fps", type=float, default=3.0,
-                    help="Bildrate im Dauerbetrieb (Default 3; 0 = so schnell wie möglich)")
+                    help="frame rate in continuous mode (default 3; 0 = as fast as possible)")
     args = ap.parse_args()
 
     ser = serial.Serial(args.port, 921600, timeout=1)
     time.sleep(0.2)
-    # Ein vorher abgebrochener Lauf kann die Firmware noch mitten in einer Übertragung haben
+    # A previously aborted run may have left the firmware in the middle of a transfer
     for i in range(3):
         drain(ser)
         ser.write(b"I\n")
@@ -228,8 +227,8 @@ def main():
             try:
                 img = capture(ser, args.roi, args.step, phase, binning)
                 n += 1
-            except Exception as e:  # Anzeige soll bei Übertragungsfehlern weiterlaufen
-                status = f"Fehler: {e}"
+            except Exception as e:  # display should keep running on transfer errors
+                status = f"Error: {e}"
                 print(status)
                 drain(ser)
             now = time.time()
@@ -237,7 +236,7 @@ def main():
                 f = 1 / (now - last)
                 fps = 0.8 * fps + 0.2 * f if fps else f
             last = now
-            if now - t_eg > 0.5 or not expgain:   # Regelwerte bei Automatik ändern sich laufend
+            if now - t_eg > 0.5 or not expgain:   # control values change continuously in automatic mode
                 try:
                     e, us, ae = query(ser, "E", "EXP")
                     g, ag = query(ser, "G", "GAIN")
@@ -252,7 +251,7 @@ def main():
                 txt = status or (f"#{n} {img.shape[1]}x{img.shape[0]} bin {binning[0]}x{binning[1]}"
                                  f" {now - t0:.2f}s" + (f" {fps:.1f}fps" if auto else " still"))
                 lines = [txt, expgain]
-                # Spalt in Bildkoordinaten (ROI-Versatz, Dezimierung und Binning herausrechnen)
+                # Slit in image coordinates (remove ROI offset, decimation and binning)
                 sx = args.step * binning[0]
                 sy = args.step * binning[1]
                 if args.slit:
@@ -272,7 +271,7 @@ def main():
                             else:
                                 yp = int((y0 + pos + 0.5) * fy)
                                 cv2.line(disp, (x0 * fx - 8, yp), (x1 * fx + 8, yp), (0, 0, 255), 2)
-                        # Fokus im Umfeld des Spalts (der Spalt selbst ist zu schmal für Laplace)
+                        # Focus in the neighborhood of the slit (the slit itself is too narrow for the Laplacian)
                         pad = 8
                         env = img[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x1 + pad]
                         lines.append(f"th {th}  edge {pos:.1f} dir {d:+d}  focus {focus(env):.0f}")
@@ -282,14 +281,14 @@ def main():
                     cv2.putText(disp, t, (5, 18 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                                 (0, 0, 255), 1)
                 cv2.imshow(win, disp)
-                # erst nach 3 s: der Moduswechsel beim Start setzt den Sensor zurück, die Automatik
-                # regelt danach noch nach (beim VGA-Binning über 2 Bilder ergab das Streifen)
+                # only after 3 s: the mode change at startup resets the sensor, and the automatic
+                # control keeps adjusting afterwards (with VGA binning over 2 frames this caused stripes)
                 if args.shot and n >= 2 and now - t_start > 3:
                     cv2.imwrite(args.shot, disp)
-                    print("Fensterbild gespeichert:", args.shot)
+                    print("Window image saved:", args.shot)
                     break
 
-        key = cv2.waitKey(20) & 0xFF   # hält das Fenster auch zwischen den Bildern bedienbar
+        key = cv2.waitKey(20) & 0xFF   # keeps the window responsive between frames
         if key in (ord("q"), 27) or cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
             break
         if key == ord("a"):
@@ -306,12 +305,12 @@ def main():
                     query(ser, "E 0", "EXP")
                     query(ser, "G -1", "GAIN")
                 else:
-                    # Beide Automatiken aus: sonst gleicht die AGC eine Belichtungsänderung sofort
-                    # über die Verstärkung aus (und umgekehrt), das Bild springt zurück.
+                    # Disable both automatic controls: otherwise AGC immediately compensates an exposure
+                    # change via the gain (and vice versa), and the image jumps back.
                     e, _, ae = query(ser, "E", "EXP")
                     g, ag = query(ser, "G", "GAIN")
                     if ae == "1":
-                        query(ser, f"E {max(1, int(e))}", "EXP")   # E 0 hieße wieder Automatik
+                        query(ser, f"E {max(1, int(e))}", "EXP")   # E 0 would mean automatic again
                     if ag == "1":
                         query(ser, f"G {g}", "GAIN")
                 if key in (ord("e"), ord("E"), ord("r")):
@@ -338,11 +337,11 @@ def main():
         elif key == ord("s") and img is not None:
             fn = time.strftime("ov7670_%Y%m%d_%H%M%S.png")
             cv2.imwrite(fn, img)
-            print("gespeichert:", fn)
+            print("saved:", fn)
 
     cv2.destroyAllWindows()
     roi = " ".join(map(str, args.slit)) if args.slit else "X Y W H"
-    print(f"scan.py-Parameter: --mode {args.mode} --roi {roi} --th {th}"
+    print(f"scan.py parameters: --mode {args.mode} --roi {roi} --th {th}"
           f" --exp {eg_vals[0]} --gain {eg_vals[1]}")
 
 
