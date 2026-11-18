@@ -153,7 +153,11 @@ Ausführliche Beschreibung im Kopf von [`ov7670_c3/ov7670_c3.ino`](ov7670_c3/ov7
 
 ## Status
 
-Funktionsmuster, auf einem Aufbau getestet. Eine Lizenz ist noch nicht festgelegt.
+Funktionsmuster, auf einem Aufbau getestet.
+
+## Lizenz
+
+MIT, siehe [`LICENSE`](LICENSE).
 
 ---
 
